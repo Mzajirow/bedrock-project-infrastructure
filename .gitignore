@@ -1,0 +1,7 @@
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+errored.tfstate
+*.tfvars
+lambda.zip
+.env
