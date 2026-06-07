@@ -2,7 +2,7 @@ Production-grade microservices infrastructure on AWS EKS for InnovateMart Inc.
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.png)
+![Architecture Diagram](architecture-diagram.png)
 
 ## Infrastructure Components
 
@@ -21,119 +21,113 @@ Production-grade microservices infrastructure on AWS EKS for InnovateMart Inc.
 | IaC | Terraform | Remote state on S3 |
 | CI/CD | GitHub Actions | Plan on PR, Apply on merge |
 
-## Prerequisites
+### Prerequisites
+Before deploying, ensure the following tools are installed and configured:
 
-- AWS CLI configured with admin credentials
-- Terraform >= 1.6
-- kubectl
-- helm >= 3
-- eksctl
-
-## Repository Structure
-.
-├── terraform/           # All infrastructure code
-│   ├── main.tf          # Provider configuration
-│   ├── backend.tf       # Remote state configuration
-│   ├── vpc.tf           # VPC and networking
-│   ├── eks.tf           # EKS cluster and node groups
-│   ├── rds.tf           # RDS instances and secrets
-│   ├── dynamodb.tf      # DynamoDB tables
-│   ├── iam.tf           # IAM users and roles
-│   ├── s3_lambda.tf     # S3 bucket and Lambda function
-│   └── outputs.tf       # Terraform outputs
-├── lambda/              # Lambda function code
-│   └── handler.py       # Asset processor function
-├── scripts/             # Utility scripts
-│   └── resume.sh        # Post-destroy spinup script
-├── grading.json         # Terraform outputs for grading
-└── .github/
-└── workflows/
-└── terraform.yml # CI/CD pipeline
+AWS CLI configured with admin credentials (aws configure)
+Terraform >= 1.6
+kubectl
+helm >= 3
+eksctl
 
 ## Deployment Guide
-
-### Initial Setup
-
-1. Bootstrap remote state S3 bucket (one time only):
-```bash
-aws s3api create-bucket \
+### Initial Deployment (First Time)
+Step 1 — Bootstrap remote state S3 bucket (one time only):
+bashaws s3api create-bucket \
   --bucket project-bedrock-tfstate-4910 \
   --region us-east-1
 
 aws s3api put-bucket-versioning \
   --bucket project-bedrock-tfstate-4910 \
   --versioning-configuration Status=Enabled
-```
 
-2. Deploy infrastructure:
-```bash
-cd terraform
+Step 2 — Deploy all AWS infrastructure:
+bashcd terraform
 terraform init
 terraform apply
-```
 
-3. Configure kubectl:
-```bash
-aws eks update-kubeconfig --region us-east-1 --name project-bedrock-cluster
-```
+⏱ This takes approximately 20–25 minutes. Resources created include: VPC, EKS cluster, RDS MySQL, RDS PostgreSQL, DynamoDB, Secrets Manager, S3 bucket, Lambda function, IAM roles, and CloudWatch logging.
 
-4. Install AWS Load Balancer Controller:
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+Step 3 — Run the resume script to complete application setup:
+bashchmod +x scripts/resume.sh
+./scripts/resume.sh
+This script automates the following post-infrastructure steps:
 
-eksctl create iamserviceaccount \
-  --cluster=project-bedrock-cluster \
-  --namespace=kube-system \
-  --name=aws-load-balancer-controller \
-  --attach-policy-arn=arn:aws:iam::${ACCOUNT_ID}:policy/AWSLoadBalancerControllerIAMPolicy \
-  --approve \
-  --override-existing-serviceaccounts \
-  --region us-east-1
+Updates kubeconfig to connect kubectl to the EKS cluster
+Installs the AWS Load Balancer Controller via Helm
+Retrieves RDS credentials from AWS Secrets Manager
+Creates the retail-app Kubernetes namespace
+Recreates Kustomize patch files with live RDS endpoints
+Deploys the retail store application using kubectl apply -k
+Patches Kubernetes secrets with database credentials
+Applies the ALB Ingress resource
+Applies the RBAC ClusterRoleBinding for bedrock-dev-view
 
-helm repo add eks https://aws.github.io/eks-charts
-helm repo update
 
-helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
-  -n kube-system \
-  --set clusterName=project-bedrock-cluster \
-  --set serviceAccount.create=false \
-  --set serviceAccount.name=aws-load-balancer-controller
-```
+### Redeploying After a Destroy (Subsequent Deployments)
+If you have torn down the infrastructure with terraform destroy and need to bring it back up:
+Step 1 — Run terraform apply:
+bashcd terraform
+export AWS_PROFILE=<your-admin-profile>
+terraform apply
 
-### Deploying the Application
+Step 2 — Run the resume script:
+bash./scripts/resume.sh
 
-See the [Application Repository](https://github.com/Mzajirow/retail-store-app) for deployment instructions.
+⚠️ The resume script handles everything after terraform apply automatically. You do not need to manually run any kubectl or helm commands.
+
 
 ### CI/CD Pipeline
+The GitHub Actions pipeline automates all infrastructure changes.
+TriggerActionOpen a Pull Request to mainRuns terraform plan and posts the output as a PR comment for reviewMerge PR to mainRuns terraform apply -auto-approve to deploy changes
+Required GitHub Secrets:
+SecretDescriptionAWS_ACCESS_KEY_IDAdmin IAM access key IDAWS_SECRET_ACCESS_KEYAdmin IAM secret access key
 
-| Trigger | Action |
-|---|---|
-| Pull Request to main | Runs `terraform plan` and posts output as PR comment |
-| Merge to main | Runs `terraform apply -auto-approve` |
+⚠️ Never hardcode AWS credentials in workflow files or commit them to the repository.
 
-**Required GitHub Secrets:**
-- `AWS_ACCESS_KEY_ID` — Admin IAM access key
-- `AWS_SECRET_ACCESS_KEY` — Admin IAM secret key
 
-### Tearing Down
+### Tearing Down Infrastructure
+Always run the teardown script instead of terraform destroy directly to avoid VPC dependency errors caused by Kubernetes-managed resources:
+bashchmod +x scripts/teardown.sh
+./scripts/teardown.sh
+This script:
 
-```bash
-cd terraform
-terraform destroy
-```
+Deletes the Kubernetes Ingress resource (prevents LB Controller from recreating the ALB)
+Finds and deletes the Classic ELB created by the ui LoadBalancer service
+Cleans up Kubernetes-managed security groups (k8s-* prefixed)
+Waits for AWS to fully release dependent resources
+Runs terraform destroy to remove all remaining infrastructure
 
-> ⚠️ Note: Delete the AWS Load Balancer manually before destroying to avoid VPC dependency errors:
-> ```bash
-> aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[*].[LoadBalancerArn]' --output text
-> aws elbv2 delete-load-balancer --load-balancer-arn <ARN> --region us-east-1
-> ```
 
-### Resuming After Destroy
+### Accessing the Application
+After deployment, get the application URL:
+bashkubectl get ingress -n retail-app
+Live URL:
+http://k8s-retailap-retailap-3c6aa53d7a-1641343226.us-east-1.elb.amazonaws.com
 
-After `terraform apply` completes:
-```bash
-./scripts/resume.sh
-```
+ℹ️ The ALB URL changes each time the infrastructure is redeployed. Always run kubectl get ingress -n retail-app to get the current URL after a fresh deployment.
+
+
+### Verifying the Deployment
+After the resume script completes, verify everything is healthy:
+bash# Check all pods are running
+kubectl get pods -n retail-app
+
+# Expected output — all pods should show 1/1 Running
+# carts, carts-dynamodb, catalog, checkout, checkout-redis, orders, orders-rabbitmq, ui
+
+# Check the ingress is provisioned
+kubectl get ingress -n retail-app
+
+# Check CloudWatch log groups are present
+aws logs describe-log-groups \
+  --region us-east-1 \
+  --query 'logGroups[*].logGroupName' \
+  --output table
+
+# Test Lambda is working by uploading a file
+aws s3 cp README.md s3://bedrock-assets-4910/test-file.txt
+MSYS_NO_PATHCONV=1 aws logs tail /aws/lambda/bedrock-asset-processor --region us-east-1Sonnet 4.6 Low
 
 ## Developer Access
 
