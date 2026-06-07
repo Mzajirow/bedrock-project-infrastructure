@@ -24,55 +24,65 @@ Production-grade microservices infrastructure on AWS EKS for InnovateMart Inc.
 ### Prerequisites
 Before deploying, ensure the following tools are installed and configured:
 
-AWS CLI configured with admin credentials (aws configure)
-Terraform >= 1.6
-kubectl
-helm >= 3
-eksctl
+- AWS CLI configured with admin credentials (aws configure)
+- Terraform >= 1.6
+- kubectl
+- helm >= 3
+- eksctl
 
 ## Deployment Guide
 ### Initial Deployment (First Time)
 Step 1 — Bootstrap remote state S3 bucket (one time only):
-bashaws s3api create-bucket \
+```bash
+aws s3api create-bucket \
   --bucket project-bedrock-tfstate-4910 \
   --region us-east-1
 
 aws s3api put-bucket-versioning \
   --bucket project-bedrock-tfstate-4910 \
   --versioning-configuration Status=Enabled
+```
 
 Step 2 — Deploy all AWS infrastructure:
-bashcd terraform
-terraform init
-terraform apply
+```bash
+- cd terraform
+- terraform init
+- terraform apply
+```
 
 ⏱ This takes approximately 20–25 minutes. Resources created include: VPC, EKS cluster, RDS MySQL, RDS PostgreSQL, DynamoDB, Secrets Manager, S3 bucket, Lambda function, IAM roles, and CloudWatch logging.
 
 Step 3 — Run the resume script to complete application setup:
-bashchmod +x scripts/resume.sh
+```bash 
+chmod +x scripts/resume.sh
 ./scripts/resume.sh
+```
 This script automates the following post-infrastructure steps:
 
-Updates kubeconfig to connect kubectl to the EKS cluster
-Installs the AWS Load Balancer Controller via Helm
-Retrieves RDS credentials from AWS Secrets Manager
-Creates the retail-app Kubernetes namespace
-Recreates Kustomize patch files with live RDS endpoints
-Deploys the retail store application using kubectl apply -k
-Patches Kubernetes secrets with database credentials
-Applies the ALB Ingress resource
-Applies the RBAC ClusterRoleBinding for bedrock-dev-view
+- Updates kubeconfig to connect kubectl to the EKS cluster
+- Installs the AWS Load Balancer Controller via Helm
+- Retrieves RDS credentials from AWS Secrets Manager
+- Creates the retail-app Kubernetes namespace
+- Recreates Kustomize patch files with live RDS endpoints
+- Deploys the retail store application using kubectl apply -k
+- Patches Kubernetes secrets with database credentials
+- Applies the ALB Ingress resource
+- Applies the RBAC ClusterRoleBinding for bedrock-dev-view
 
 
 ### Redeploying After a Destroy (Subsequent Deployments)
 If you have torn down the infrastructure with terraform destroy and need to bring it back up:
-Step 1 — Run terraform apply:
-bashcd terraform
+- Step 1 — Run terraform apply:
+``` bash
+cd terraform
 export AWS_PROFILE=<your-admin-profile>
 terraform apply
+```
 
-Step 2 — Run the resume script:
-bash./scripts/resume.sh
+- Step 2 — Run the resume script:
+```bash
+./scripts/resume.sh
+```
 
 ⚠️ The resume script handles everything after terraform apply automatically. You do not need to manually run any kubectl or helm commands.
 
@@ -80,18 +90,23 @@ bash./scripts/resume.sh
 ### CI/CD Pipeline
 The GitHub Actions pipeline automates all infrastructure changes.
 TriggerActionOpen a Pull Request to mainRuns terraform plan and posts the output as a PR comment for reviewMerge PR to mainRuns terraform apply -auto-approve to deploy changes
-Required GitHub Secrets:
-SecretDescriptionAWS_ACCESS_KEY_IDAdmin IAM access key IDAWS_SECRET_ACCESS_KEYAdmin IAM secret access key
+
+### Required GitHub Secrets:
+SecretDescription
+- AWS_ACCESS_KEY_ID
+- AWS_SECRET_ACCESS_KEY
 
 ⚠️ Never hardcode AWS credentials in workflow files or commit them to the repository.
 
 
 ### Tearing Down Infrastructure
 Always run the teardown script instead of terraform destroy directly to avoid VPC dependency errors caused by Kubernetes-managed resources:
-bashchmod +x scripts/teardown.sh
+```bash
+chmod +x scripts/teardown.sh
 ./scripts/teardown.sh
-This script:
+```
 
+This script:
 Deletes the Kubernetes Ingress resource (prevents LB Controller from recreating the ALB)
 Finds and deletes the Classic ELB created by the ui LoadBalancer service
 Cleans up Kubernetes-managed security groups (k8s-* prefixed)
@@ -102,32 +117,36 @@ Runs terraform destroy to remove all remaining infrastructure
 ### Accessing the Application
 After deployment, get the application URL:
 bashkubectl get ingress -n retail-app
-Live URL:
-http://k8s-retailap-retailap-3c6aa53d7a-1641343226.us-east-1.elb.amazonaws.com
 
 ℹ️ The ALB URL changes each time the infrastructure is redeployed. Always run kubectl get ingress -n retail-app to get the current URL after a fresh deployment.
 
 
 ### Verifying the Deployment
 After the resume script completes, verify everything is healthy:
-bash# Check all pods are running
+```bash
+# Check all pods are running
 kubectl get pods -n retail-app
+```
 
-# Expected output — all pods should show 1/1 Running
-# carts, carts-dynamodb, catalog, checkout, checkout-redis, orders, orders-rabbitmq, ui
+### Expected output — all pods should show 1/1 Running
+carts, carts-dynamodb, catalog, checkout, checkout-redis, orders, orders-rabbitmq, ui
 
-# Check the ingress is provisioned
+### Check the ingress is provisioned
 kubectl get ingress -n retail-app
 
-# Check CloudWatch log groups are present
+## Check CloudWatch log groups are present
+```bash
 aws logs describe-log-groups \
   --region us-east-1 \
   --query 'logGroups[*].logGroupName' \
   --output table
+```
 
-# Test Lambda is working by uploading a file
+## Test Lambda is working by uploading a file
+```bash 
 aws s3 cp README.md s3://bedrock-assets-4910/test-file.txt
-MSYS_NO_PATHCONV=1 aws logs tail /aws/lambda/bedrock-asset-processor --region us-east-1Sonnet 4.6 Low
+MSYS_NO_PATHCONV=1 aws logs tail /aws/lambda/bedrock-asset-processor --region us-east-1
+```
 
 ## Developer Access
 
